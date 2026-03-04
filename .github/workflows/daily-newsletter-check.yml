@@ -24,6 +24,7 @@ jobs:
         run: |
           TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
           echo "TODAY=$TODAY" >> $GITHUB_OUTPUT
+
           FOUND_FILE=$(find "뉴스레터" -maxdepth 1 -type f -name "${TODAY}*.md" | sort | head -1)
 
           if [ -n "$FOUND_FILE" ]; then
@@ -36,7 +37,7 @@ jobs:
             echo "❌ Not found"
           fi
 
-      - name: Post to Slack (parsed & pretty)
+      - name: Post to Slack (title linked + try URL preview)
         if: steps.find.outputs.found == 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -45,7 +46,7 @@ jobs:
           FILENAME: ${{ steps.find.outputs.filename }}
         run: |
           python3 - << 'PY'
-          import os, re, json, textwrap, urllib.request
+          import os, re, json, urllib.request
 
           webhook = os.environ["SLACK_WEBHOOK_URL"]
           today = os.environ["TODAY"]
@@ -55,10 +56,10 @@ jobs:
           with open(filepath, "r", encoding="utf-8") as f:
             md = f.read()
 
-          # 이미지 라인 제거
+          # 1) 이미지 라인 제거
           md = re.sub(r"^\!\[Image\]\([^)]+\)\s*$", "", md, flags=re.MULTILINE).strip()
 
-          # 항목 분리 (--- 기준)
+          # 2) 항목 분리 (--- 기준)
           parts = [p.strip() for p in md.split("\n---\n") if p.strip()]
 
           def pick(pattern, text, default=""):
@@ -74,13 +75,6 @@ jobs:
             score = pick(r"^\*\*중요도\*\*:\s*(.+)$", p)
             link  = pick(r"^\*\*전체링크\*\*\s*:\s*(.+)$", p)
 
-            # 본문(타이틀 아래 전체)도 조금만 보여주고 싶으면:
-            # title 라인 제거 후 500자 preview
-            body_wo_title = re.sub(r"^##\s*제목:.*$", "", p, flags=re.MULTILINE).strip()
-            preview = body_wo_title
-            preview = re.sub(r"\n{3,}", "\n\n", preview).strip()
-            preview = preview[:500]
-
             if title:
               items.append({
                 "title": title,
@@ -89,10 +83,9 @@ jobs:
                 "field": field,
                 "score": score,
                 "link": link,
-                "preview": preview,
               })
 
-          # Slack 블록 제한(50개) 고려: 기본 6개만
+          # Slack block 제한 고려 (50) + 너무 길어지는 것 방지: 상위 6개
           MAX_ITEMS = 6
           items = items[:MAX_ITEMS]
 
@@ -113,13 +106,17 @@ jobs:
           blocks.append({"type": "divider"})
 
           for i, it in enumerate(items, 1):
+            # A) 제목 자체에 원문 링크 걸기
             title = it["title"]
-            # 한 “카드”처럼: 제목 + (요약/쉬운설명/관련/중요도) 중 있는 것만
+            if it["link"]:
+              title = f"<{it['link']}|{title}>"
+
             lines = [f"*{i}. {title}*"]
             if it["summary"]:
               lines.append(f"*요약:* {it['summary']}")
             if it["easy"]:
               lines.append(f"*쉬운설명:* {it['easy']}")
+
             meta = []
             if it["field"]:
               meta.append(it["field"])
@@ -127,17 +124,19 @@ jobs:
               meta.append(f"중요도 {it['score']}")
             if meta:
               lines.append(f"_({' · '.join(meta)})_")
+
+            # B) URL preview가 더 잘 뜨게: URL을 "단독 라인"으로 한 번 더 노출
+            # (보장 X, 도메인/워크스페이스 설정 영향 큼)
             if it["link"]:
-              lines.append(f"<{it['link']}|원문 링크>")
+              lines.append(it["link"])
 
             text = "\n".join(lines)
-            # Slack section 텍스트 길이 너무 길어지면 잘림 방지
+            # 섹션 텍스트 길이 제한 대비
             text = text[:2800]
 
             blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
             blocks.append({"type": "divider"})
 
-          # 하단 버튼
           blocks.append({
             "type": "actions",
             "elements": [{
