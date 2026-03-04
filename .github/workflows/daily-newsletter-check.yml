@@ -1,9 +1,8 @@
 name: Daily Newsletter Check
 on:
   schedule:
-    # 매일 오전 9시 (한국시간 기준, UTC 00:00)
     - cron: '0 0 * * *'
-  workflow_dispatch: # ⭐ 수동 실행 가능!
+  workflow_dispatch:
 jobs:
   check-and-notify:
     runs-on: ubuntu-latest
@@ -16,25 +15,13 @@ jobs:
       - name: Check today's newsletter
         id: check
         run: |
-          # 오늘 날짜 (YYYY-MM-DD 형식)
           TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
           echo "오늘 날짜: $TODAY"
-          # 가능한 파일명 패턴들
-          FOUND_FILE=""
-          # 패턴 1: YYYY-MM-DD.md
-          if [ -f "뉴스레터/${TODAY}.md" ]; then
-            FOUND_FILE="뉴스레터/${TODAY}.md"
-          # 패턴 2: YYYY-MM-DD로 시작하는 파일
-          elif ls 뉴스레터/${TODAY}*.md 2>/dev/null; then
-            FOUND_FILE=$(ls 뉴스레터 -1)
-          # 패턴 3: 날짜가 포함된 파일
-          elif ls 뉴스레터/*${TODAY}*.md 2>/dev/null; then
-            FOUND_FILE=$(ls 뉴스레터/*${TODAY}*.md | head -1)
-          fi
+          # 오늘 날짜로 시작하는 첫 번째 파일 찾기
+          FOUND_FILE=$(find 뉴스레터 -name "${TODAY}*.md" -type f | head -1)
           if [ -n "$FOUND_FILE" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
             echo "file=$FOUND_FILE" >> $GITHUB_OUTPUT
-            # 파일명 추출
             filename=$(basename "$FOUND_FILE")
             echo "filename=$filename" >> $GITHUB_OUTPUT
             echo "✅ 파일 발견: $FOUND_FILE"
@@ -50,12 +37,9 @@ jobs:
           FILEPATH: ${{ steps.check.outputs.file }}
         run: |
           TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
-          # 파일 내용 읽기 (처음 1000자)
           CONTENT=$(head -c 1000 "$FILEPATH")
-          # JSON 이스케이프
           CONTENT_ESCAPED=$(echo "$CONTENT" | jq -Rs . | sed 's/^"//;s/"$//')
           FILE_URL="https://github.com/GENEXIS-AI/DailyNews/blob/main/$FILEPATH"
-          # Slack 메시지 전송
           curl -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d "{
@@ -76,7 +60,8 @@ jobs:
                   }
                 },
                 {
-                  \"type\": \"section": {
+                  \"type\": \"section\",
+                  \"text\": {
                     \"type\": \"mrkdwn\",
                     \"text\": \"*미리보기:*\n\`\`\`${CONTENT_ESCAPED}\`\`\`\"
                   }
