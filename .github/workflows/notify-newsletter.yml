@@ -1,0 +1,79 @@
+name: Newsletter Notification
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '뉴스레터/**/*.md'
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            뉴스레터/**/*.md
+      - name: Send to Slack
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            # 파일명 추출
+            filename=$(basename "$file")
+            # 파읽기 (처음 500자만)
+            content=$(head -c 500 "$file" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+            # GitHub 파일 URL 생성
+            file_url="https://github.com/${{ github.repository }}/blob/main/$file"
+            # Slack 메시지 전송
+            curl -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              -d "{
+                \"blocks\": [
+                  {
+                    \"type\": \"header\",
+                    \"text\": {
+                      \"type\": \"plain_text\",
+                      \"text\": \"📰 새 뉴스레터 업데이트\",
+                      \"emoji\": true
+                    }
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"text\": {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*파일명:* \`$filename\`\"
+                    }
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"text\": {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*미리보기:*\n\`\`\`$content...\`\`\`\"
+                    }
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"text\": {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"<$file_url>\"
+                    }
+                  },
+                  {
+                    \"type\": \"context\",
+                    \"elements\": [
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"Updated by *${{ github.actor }}* • $(date +'%Y-%m-%d %H:%M:%S')\"
+                      }
+                    ]
+                  }
+                ]
+              }"
+          done
