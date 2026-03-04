@@ -1,151 +1,168 @@
 name: Daily Newsletter Check
+
 on:
   schedule:
-    - cron: '0 0 * * *'
+    # KST 09:00 = UTC 00:00
+    - cron: "0 0 * * *"
   workflow_dispatch:
+
 jobs:
   check-and-notify:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout upstream repository
         uses: actions/checkout@v4
         with:
           repository: GENEXIS-AI/DailyNews
           ref: main
-      - name: Check today's newsletter
-        id: check
+          fetch-depth: 1
+
+      - name: Find today's newsletter file
+        id: find
+        shell: bash
         run: |
           TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
-          echo "오늘 날짜: $TODAY"
-          FOUND_FILE=$(find 뉴스레터 -name "${TODAY}*.md" -type f | head -1)
+          echo "TODAY=$TODAY" >> $GITHUB_OUTPUT
+          FOUND_FILE=$(find "뉴스레터" -maxdepth 1 -type f -name "${TODAY}*.md" | sort | head -1)
+
           if [ -n "$FOUND_FILE" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
             echo "file=$FOUND_FILE" >> $GITHUB_OUTPUT
-            filename=$(basename "$FOUND_FILE")
-            echo "filename=$filename" >> $GITHUB_OUTPUT
-            echo "✅ 파일 발견: $FOUND_FILE"
+            echo "filename=$(basename "$FOUND_FILE")" >> $GITHUB_OUTPUT
+            echo "✅ Found: $FOUND_FILE"
           else
             echo "found=false" >> $GITHUB_OUTPUT
-            echo "❌ 오늘자 뉴스레터를 찾을 수 없습니다."
+            echo "❌ Not found"
           fi
-      - name: Send to Slack
-        if: steps.check.outputs.found == 'true'
+
+      - name: Post to Slack (parsed & pretty)
+        if: steps.find.outputs.found == 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          FILENAME: ${{ steps.check.outputs.filename }}
-          FILEPATH: ${{ steps.check.outputs.file }}
+          TODAY: ${{ steps.find.outputs.TODAY }}
+          FILEPATH: ${{ steps.find.outputs.file }}
+          FILENAME: ${{ steps.find.outputs.filename }}
         run: |
-          TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
-          FILE_URL="https://github.com/GENEXIS-AI/DailyNews/blob/main/$FILEPATH"
-          # 첫 번째 뉴스 항목 추출 (이미지 제외)
-          FIRST_NEWS=$(awk '/^## 제목:/{flag=1} flag{print} /^---$/{if(flag) exit}' "$FILEPATH" | grep -v "^!\[Image\]")
-          # 제목 추출
-          TITLE=$(echo "$FIRST_NEWS" | grep "^## 제목:" | sed 's/## 제목: //')
-          # 요약 추출
-          SUMMARY=$(echo "$FIRST_NEWS" | grep "^\*\*요약\*\*:" | sed 's/\*\*요약\*\*: //')
-          # 쉬운설명 추출
-          EASY=$(echo "$FIRST_NEWS" | grep "^\*\*쉬운설명\*\*:" | sed 's/\*\*쉬운설명\*\*: //')
-          # 관련분야 추출
-          FIELD=$(echo "$FIRST_NEWS" | grep "^\*\*관련분야\*\*:" | sed 's/\*\*관련분야\*\*: //')
-          # 중요도 추출
-          IMPORTANCE=$(echo "$FIRST_NEWS" | grep "^\*\*중요도\*\*:" | sed 's/\*\*중요도\*\*: //')
-          # 전체링크 추출
-          LINK=$(echo "$FIRST_NEWS" | grep "^\*\*전체링크\*\*" | sed 's/\*\*전체링크\*\* : //' | tr -d '')
-          # JSON 이스케이프
-          TITLE_ESC=$(echo "$TITLE" |q -Rs .)
-          SUMMARY_ESC=$(echo "$SUMMARY" | jq -Rs .)
-          EASY_ESC=$(echo "$EASY" | jq -Rs .)
-          FIELD_ESC=$(echo "$FIELD" | jq -Rs .)
-          # Slack 메시지 전송
-          curl -X POST "$SLACK_WEBHOOK_URL" \
-            -H 'Content-Type: application/json' \
-            -d "{
-              \"blocks\": [
-                {
-                  \"type\": \"header\",
-                  \"text\": {
-                    \"type\": \"plain_text\",
-                    \"text\": \"📰 ${TODAY} AI 뉴스레터\",
-                    \"emoji\": true
-                  }
-                },
-                {
-                  \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"*${TITLE}*\"
-                  }
-                },
-                {
-                  \"type\": \"section\",
-                  \"fields\": [
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*📌 요약*\n${SUMMARY_ESC//\"/}\"
-                    }
-                  ]
-                },
-                {
-                  \"type\": \"section\",
-                  \"fields\": [
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*💡 쉬운설명*\n${EASY_ESC//\"/}\"
-                    }
-                  ]
-                },
-                {
-                  \"type\": \"section\",
-                  \"fields\": [
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*🏷️ 분야*\n${FIELD_ESC//\"/}\"
-                    },
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*⭐ 중요도*\n${IMPORTANCE}\"
-                    }
-                  ]
-                },
-                {
-                  \"type\": \"divider\"
-                },
-                {
-                  \"type\": \"actions\",
-                  \"elements\": [
-                    {
-                      \"type\": \"button\",
-                      \"text\": {
-                        \"type\": \"plain_text\",
-                        \"text\": \"🔗 원문 보기\",
-                        \"emoji\": true
-                      },
-                      \"url\": \"${LINK}\",
-                      \"style\": \"primary\"
-                    },
-                    {
-                      \"type\": \"button\",
-                        \"type\": \"plain_text\",
-                        \"text\": \"📄 전체 뉴스레터\",
-                        \"emoji\": true
-                      },
-                      \"url\": \"${FILE_URL}\"
-                    }
-                  ]
-                },
-                {
-                  \"type\": \"context\",
-                  \"elements\": [
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"🕐 $(TZ=Asia/Seoul date +'%Y년 %m월 %d일 %H:%M') KST\"
-                    }
-                  ]
-                }
-              ]
-            }"
+          python3 - << 'PY'
+          import os, re, json, textwrap, urllib.request
+
+          webhook = os.environ["SLACK_WEBHOOK_URL"]
+          today = os.environ["TODAY"]
+          filepath = os.environ["FILEPATH"]
+          filename = os.environ["FILENAME"]
+
+          with open(filepath, "r", encoding="utf-8") as f:
+            md = f.read()
+
+          # 이미지 라인 제거
+          md = re.sub(r"^\!\[Image\]\([^)]+\)\s*$", "", md, flags=re.MULTILINE).strip()
+
+          # 항목 분리 (--- 기준)
+          parts = [p.strip() for p in md.split("\n---\n") if p.strip()]
+
+          def pick(pattern, text, default=""):
+            m = re.search(pattern, text, flags=re.MULTILINE)
+            return (m.group(1).strip() if m else default)
+
+          items = []
+          for p in parts:
+            title = pick(r"^##\s*제목:\s*(.+)$", p)
+            summary = pick(r"^\*\*요약\*\*:\s*(.+)$", p)
+            easy = pick(r"^\*\*쉬운설명\*\*:\s*(.+)$", p)
+            field = pick(r"^\*\*관련분야\*\*:\s*(.+)$", p)
+            score = pick(r"^\*\*중요도\*\*:\s*(.+)$", p)
+            link  = pick(r"^\*\*전체링크\*\*\s*:\s*(.+)$", p)
+
+            # 본문(타이틀 아래 전체)도 조금만 보여주고 싶으면:
+            # title 라인 제거 후 500자 preview
+            body_wo_title = re.sub(r"^##\s*제목:.*$", "", p, flags=re.MULTILINE).strip()
+            preview = body_wo_title
+            preview = re.sub(r"\n{3,}", "\n\n", preview).strip()
+            preview = preview[:500]
+
+            if title:
+              items.append({
+                "title": title,
+                "summary": summary,
+                "easy": easy,
+                "field": field,
+                "score": score,
+                "link": link,
+                "preview": preview,
+              })
+
+          # Slack 블록 제한(50개) 고려: 기본 6개만
+          MAX_ITEMS = 6
+          items = items[:MAX_ITEMS]
+
+          file_url = f"https://github.com/GENEXIS-AI/DailyNews/blob/main/{filepath}"
+
+          blocks = []
+          blocks.append({
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"📰 {today} 뉴스레터", "emoji": True}
+          })
+          blocks.append({
+            "type": "context",
+            "elements": [{
+              "type": "mrkdwn",
+              "text": f"*파일:* `{filename}`  ·  <{file_url}|GitHub에서 전체 보기>"
+            }]
+          })
+          blocks.append({"type": "divider"})
+
+          for i, it in enumerate(items, 1):
+            title = it["title"]
+            # 한 “카드”처럼: 제목 + (요약/쉬운설명/관련/중요도) 중 있는 것만
+            lines = [f"*{i}. {title}*"]
+            if it["summary"]:
+              lines.append(f"*요약:* {it['summary']}")
+            if it["easy"]:
+              lines.append(f"*쉬운설명:* {it['easy']}")
+            meta = []
+            if it["field"]:
+              meta.append(it["field"])
+            if it["score"]:
+              meta.append(f"중요도 {it['score']}")
+            if meta:
+              lines.append(f"_({' · '.join(meta)})_")
+            if it["link"]:
+              lines.append(f"<{it['link']}|원문 링크>")
+
+            text = "\n".join(lines)
+            # Slack section 텍스트 길이 너무 길어지면 잘림 방지
+            text = text[:2800]
+
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
+            blocks.append({"type": "divider"})
+
+          # 하단 버튼
+          blocks.append({
+            "type": "actions",
+            "elements": [{
+              "type": "button",
+              "text": {"type": "plain_text", "text": "📄 전체 뉴스레터 열기", "emoji": True},
+              "url": file_url,
+              "style": "primary"
+            }]
+          })
+
+          payload = {"blocks": blocks}
+
+          req = urllib.request.Request(
+            webhook,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+          )
+          with urllib.request.urlopen(req) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            print("Slack response:", resp.status, body)
+          PY
+
       - name: No newsletter found
-        if: steps.check.outputs.found == 'false'
+        if: steps.find.outputs.found == 'false'
         run: |
           TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
-          echo "오늘(${TODAY}) 뉴스레터를 찾을 수 없습니다."
+          echo "No newsletter for ${TODAY}."
