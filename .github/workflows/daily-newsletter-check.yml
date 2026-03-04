@@ -17,7 +17,6 @@ jobs:
         run: |
           TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
           echo "오늘 날짜: $TODAY"
-          # 오늘 날짜로 시작하는 첫 번째 파일 찾기
           FOUND_FILE=$(find 뉴스레터 -name "${TODAY}*.md" -type f | head -1)
           if [ -n "$FOUND_FILE" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
@@ -37,9 +36,27 @@ jobs:
           FILEPATH: ${{ steps.check.outputs.file }}
         run: |
           TODAY=$(TZ=Asia/Seoul date +%Y-%m-%d)
-          CONTENT=$(head -c 1000 "$FILEPATH")
-          CONTENT_ESCAPED=$(echo "$CONTENT" | jq -Rs . | sed 's/^"//;s/"$//')
           FILE_URL="https://github.com/GENEXIS-AI/DailyNews/blob/main/$FILEPATH"
+          # 첫 번째 뉴스 항목 추출 (이미지 제외)
+          FIRST_NEWS=$(awk '/^## 제목:/{flag=1} flag{print} /^---$/{if(flag) exit}' "$FILEPATH" | grep -v "^!\[Image\]")
+          # 제목 추출
+          TITLE=$(echo "$FIRST_NEWS" | grep "^## 제목:" | sed 's/## 제목: //')
+          # 요약 추출
+          SUMMARY=$(echo "$FIRST_NEWS" | grep "^\*\*요약\*\*:" | sed 's/\*\*요약\*\*: //')
+          # 쉬운설명 추출
+          EASY=$(echo "$FIRST_NEWS" | grep "^\*\*쉬운설명\*\*:" | sed 's/\*\*쉬운설명\*\*: //')
+          # 관련분야 추출
+          FIELD=$(echo "$FIRST_NEWS" | grep "^\*\*관련분야\*\*:" | sed 's/\*\*관련분야\*\*: //')
+          # 중요도 추출
+          IMPORTANCE=$(echo "$FIRST_NEWS" | grep "^\*\*중요도\*\*:" | sed 's/\*\*중요도\*\*: //')
+          # 전체링크 추출
+          LINK=$(echo "$FIRST_NEWS" | grep "^\*\*전체링크\*\*" | sed 's/\*\*전체링크\*\* : //' | tr -d '')
+          # JSON 이스케이프
+          TITLE_ESC=$(echo "$TITLE" |q -Rs .)
+          SUMMARY_ESC=$(echo "$SUMMARY" | jq -Rs .)
+          EASY_ESC=$(echo "$EASY" | jq -Rs .)
+          FIELD_ESC=$(echo "$FIELD" | jq -Rs .)
+          # Slack 메시지 전송
           curl -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d "{
@@ -48,7 +65,7 @@ jobs:
                   \"type\": \"header\",
                   \"text\": {
                     \"type\": \"plain_text\",
-                    \"text\": \"📰 ${TODAY} 뉴스레터\",
+                    \"text\": \"📰 ${TODAY} AI 뉴스레터\",
                     \"emoji\": true
                   }
                 },
@@ -56,29 +73,72 @@ jobs:
                   \"type\": \"section\",
                   \"text\": {
                     \"type\": \"mrkdwn\",
-                    \"text\": \"*파일명:* \`${FILENAME}\`\"
+                    \"text\": \"*${TITLE}*\"
                   }
                 },
                 {
                   \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"*미리보기:*\n\`\`\`${CONTENT_ESCAPED}\`\`\`\"
-                  }
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*📌 요약*\n${SUMMARY_ESC//\"/}\"
+                    }
+                  ]
                 },
                 {
                   \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"<${FILE_URL}>\"
-                  }
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*💡 쉬운설명*\n${EASY_ESC//\"/}\"
+                    }
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*🏷️ 분야*\n${FIELD_ESC//\"/}\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*⭐ 중요도*\n${IMPORTANCE}\"
+                    }
+                  ]
+                },
+                {
+                  \"type\": \"divider\"
+                },
+                {
+                  \"type\": \"actions\",
+                  \"elements\": [
+                    {
+                      \"type\": \"button\",
+                      \"text\": {
+                        \"type\": \"plain_text\",
+                        \"text\": \"🔗 원문 보기\",
+                        \"emoji\": true
+                      },
+                      \"url\": \"${LINK}\",
+                      \"style\": \"primary\"
+                    },
+                    {
+                      \"type\": \"button\",
+                        \"type\": \"plain_text\",
+                        \"text\": \"📄 전체 뉴스레터\",
+                        \"emoji\": true
+                      },
+                      \"url\": \"${FILE_URL}\"
+                    }
+                  ]
                 },
                 {
                   \"type\": \"context\",
                   \"elements\": [
                     {
                       \"type\": \"mrkdwn\",
-                      \"text\": \"오늘의 뉴스레터 • $(TZ=Asia/Seoul date +'%Y-%m-%d %H:%M:%S KST')\"
+                      \"text\": \"🕐 $(TZ=Asia/Seoul date +'%Y년 %m월 %d일 %H:%M') KST\"
                     }
                   ]
                 }
